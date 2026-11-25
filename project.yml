@@ -1,0 +1,42 @@
+name: FileOpen
+
+options:
+  bundleIdPrefix: app.mulberry6323
+  deploymentTarget:
+    iOS: "16.0"
+  createIntermediateGroups: true
+
+packages:
+  ZIPFoundation:
+    url: https://github.com/weichsel/ZIPFoundation
+    from: 0.9.19
+
+settings:
+  base:
+    SWIFT_VERSION: "5.0"
+    TARGETED_DEVICE_FAMILY: "1,2"
+    IPHONEOS_DEPLOYMENT_TARGET: "16.0"
+    GENERATE_INFOPLIST_FILE: NO
+    INFOPLIST_FILE: FileOpen/Resources/Info.plist
+    PRODUCT_BUNDLE_IDENTIFIER: app.mulberry6323.kuaikai3
+    PRODUCT_NAME: FileOpen
+    CODE_SIGNING_ALLOWED: NO
+    CODE_SIGN_IDENTITY: ""
+    DEVELOPMENT_TEAM: ""
+
+targets:
+  FileOpen:
+    type: application
+    platform: iOS
+    sources:
+      - path: FileOpen/App
+    dependencies:
+      - package: ZIPFoundation
+
+schemes:
+  FileOpen:
+    build:
+      targets:
+        FileOpen: all
+    run:
+      config: Release

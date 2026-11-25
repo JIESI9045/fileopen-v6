@@ -1,0 +1,115 @@
+name: 构建快开 v6 IPA（自检版）
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: fileopen-v6
+  cancel-in-progress: true
+
+jobs:
+  ipa:
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 选最新 Xcode
+        run: |
+          NEWEST=$(ls -d /Applications/Xcode*.app | sort -V | tail -1)
+          echo "使用 $NEWEST"
+          sudo xcode-select -s "$NEWEST"
+          xcodebuild -version
+
+      - name: 安装 XcodeGen
+        run: brew install xcodegen || brew upgrade xcodegen
+
+      - name: 生成工程
+        run: |
+          xcodegen generate
+          ls -la
+
+      - name: 写入版本
+        env:
+          BUILD_NUMBER: ${{ github.run_number }}
+        run: |
+          python3 - <<'PY'
+          import plistlib, os
+          p = 'FileOpen/Resources/Info.plist'
+          with open(p,'rb') as f: d = plistlib.load(f)
+          d['CFBundleVersion'] = str(os.environ['BUILD_NUMBER'])
+          with open(p,'wb') as f: plistlib.dump(d, f)
+          print('build', d['CFBundleVersion'])
+          PY
+
+      - name: 解析依赖
+        run: |
+          set +e
+          xcodebuild -resolvePackageDependencies -project FileOpen.xcodeproj -scheme FileOpen > resolve.log 2>&1
+          S=$?
+          echo "resolve exit=$S"
+          tail -n 40 resolve.log
+          exit $S
+
+      - name: 编译
+        run: |
+          set +e
+          xcodebuild -project FileOpen.xcodeproj -scheme FileOpen -configuration Release \
+            -sdk iphoneos -destination 'generic/platform=iOS' \
+            -derivedDataPath "$PWD/build" \
+            CODE_SIGNING_ALLOWED=NO CODE_SIGN_IDENTITY="" PROVISIONING_PROFILE="" \
+            GENERATE_INFOPLIST_FILE=NO build > build.log 2>&1
+          S=$?
+          echo "exit=$S"
+          if [ $S -ne 0 ]; then
+            echo "==== 错误 ===="
+            grep -n "error:" build.log | head -40 || tail -n 120 build.log
+            exit $S
+          fi
+          tail -n 5 build.log
+
+      - name: 打包 + 校验
+        run: |
+          set -euo pipefail
+          APP="$PWD/build/Build/Products/Release-iphoneos/FileOpen.app"
+          test -d "$APP"
+          rm -rf Payload dist && mkdir -p Payload dist
+          cp -R "$APP" Payload/
+          zip -qr dist/fileopen-v6-unsigned.ipa Payload
+          python3 - <<'PY'
+          import plistlib, zipfile
+          z = zipfile.ZipFile('dist/fileopen-v6-unsigned.ipa')
+          info = plistlib.loads(z.read('Payload/FileOpen.app/Info.plist'))
+          print('bundle', info['CFBundleIdentifier'], 'ver', info['CFBundleShortVersionString'], info['CFBundleVersion'])
+          print('display', info['CFBundleDisplayName'], 'inplace', info['LSSupportsOpeningDocumentsInPlace'])
+          scene = info['UIApplicationSceneManifest']['UISceneConfigurations']['UIWindowSceneSessionRoleApplication'][0]
+          print('scene', scene['UISceneDelegateClassName'])
+          types = info['CFBundleDocumentTypes'][0]['LSItemContentTypes']
+          print('doc types', len(types))
+          b = z.read('Payload/FileOpen.app/FileOpen')
+          print('binary', len(b))
+          assert b[:4] == b'\xcf\xfa\xed\xfe'
+          for sym in [b'openURLContexts', b'DocxVC', b'DemoTableVC', b'drainInbox', b'localCopy']:
+              assert sym in b, sym
+          print('[OK] 入口 + 协调复制 + QuickLook 全部入包')
+          PY
+          ls -lh dist/
+
+      - name: 上传
+        uses: actions/upload-artifact@v4
+        with:
+          name: fileopen-v6-ipa
+          path: dist/fileopen-v6-unsigned.ipa
+          if-no-files-found: error
+
+      - name: 失败日志
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: fileopen-v6-log
+          path: build.log
+          if-no-files-found: warn
